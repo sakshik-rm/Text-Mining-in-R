@@ -1,0 +1,141 @@
+---
+title: "trumpTMc.Rmd"
+output: html_document
+---
+
+```{r}
+library(tm)
+library(parallel)
+library(wordcloud)
+library(syuzhet)
+library(ggplot2)
+library(stringr)
+```
+
+```{r}
+#Loading in data
+donald <- read.csv("hashtag_donaldtrump.csv")
+trumptwts <- donald %>% select(tweet)
+
+```
+
+```{r}
+#FUNCTIONS------------------------
+amp <- function(cleaned){
+# Get rid of hashtags
+  str_replace_all(cleaned,"#[a-z,A-Z]*","")
+# Get rid of references to other usernames
+  str_replace_all(cleaned,"@[a-z,A-Z]*","")
+# Get rid of URLs
+  gsub(" ?(f|ht)(tp)(s?)(://)(.*)[.|/]", "", cleaned)
+#get rid of unnecessary spaces
+  gsub(" [\n]", "", cleaned)
+  gsub("&amp", "", cleaned)
+}
+
+createcorpus <- function(tweets){
+  tweets <-  Corpus(VectorSource(tweets))
+}
+
+```
+
+```{r}
+#Setting up cores and clusters
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)
+
+```
+
+```{r}
+#Cleaning and creating corpus via parallel computation
+clusterEvalQ(cl, library(stringr))
+cleaned2 <- parLapply(cl, trumptwts, amp)
+
+clusterEvalQ(cl, library(tm))
+trumpus <- parLapply(cl, cleaned2, createcorpus)
+
+```
+
+```{r}
+#Further cleaning with 'tm'
+dontrm <- tm_map(trumpus[[1]], content_transformer(tolower))
+dontrm <- tm_map(dontrm, removePunctuation)
+dontrm <- tm_map(dontrm, removeNumbers)
+dontrm <- tm_map(dontrm, stripWhitespace)
+dontrm <- tm_map(dontrm, removeWords, stopwords("en"))
+
+```
+
+```{r}
+#Converting corpus to Term Document Matrix 
+tdump <- TermDocumentMatrix(dontrm)
+sprs2 <- removeSparseTerms(tdump, 0.99)
+tramat <- as.matrix(sprs2)
+dim(tramat)
+trsort <- sort(rowSums(tramat), decreasing=TRUE)
+umpn <- data.frame(word = names(trsort), freq = trsort)
+
+```
+
+```{r}
+#Customised character vector of words to remove from matrix
+rmwords <- paste(c("trump", "biden", "joe", "joebiden", "donald", "kamala", "harris","2020", "elections", "usa", "america", "president", "election", "cnn", "amp", "que", "twitter", "vote", "covid", "'s", "maga", "gop", "elecciones", "coronavirus", "maga", "potus", "los", "states", "les", "con", "democrats", "las", "die", "che", "des", "por", "und", "obama","alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware","florida","georgia","hawaii","idaho","illinois","indiana","iowa","kansas","kentucky","louisiana","maine","maryland","massachusetts","michigan","minnesota","mississippi","missouri","montana","nebraska","nevada","new hampshire","new jersey","new mexico","new york","north carolina","north dakota","ohio","oklahoma","oregon","pennsylvania","rhode island","south carolina", "south dakota","tennessee","texas","utah","vermont","virginia","washington","west virginia","wisconsin","wyoming"), collapse = "|")
+
+umpn <- umpn %>% filter(!grepl(rmwords, word))
+```
+
+```{r}
+#---------------------------------------RESULTS----------
+#WORDCLOUD
+wordcloud(words=umpn$word, freq=umpn$freq, min.freq=5, max.words=100, 
+          random.order=FALSE, rot.per = 0.4, colors=brewer.pal(8, "Dark2"))
+
+#BARPLOT
+barplot(umpn[1:10,]$freq, names.arg = umpn[1:10,]$word, col ="firebrick3", 
+        main ="Top 10 most frequent words", ylab = "Word frequencies")
+
+```
+
+```{r}
+#EMOTION CLASSIFICATION
+
+twtsch <- sapply(umpn, as.character)
+twtsch <- as.character(twtsch)
+nrcdon <- get_nrc_sentiment(twtsch)
+head(nrcdon, 10)
+
+donrc <- data.frame(t(nrcdon))
+dim(donrc)
+donrc_new <- data.frame(rowSums(donrc))
+names(donrc_new)[1] <- "count"
+donrc_new <- cbind("sentiment" = rownames(donrc_new), donrc_new)
+rownames(donrc_new) <- NULL
+
+#For plotting individual sentiment graph
+qplot(sentiment, data=donrc_new, weight=count, geom="bar", fill=sentiment,ylab="count") + ggtitle("Survey sentiments")
+
+#For plotting individual proportional sentiment graph
+barplot(
+  sort(colSums(prop.table(nrcdon))),
+  col = "firebrick2",
+  horiz = TRUE, 
+  cex.names = 0.7, 
+  las = 1, 
+  main = "Emotions in Text", xlab="Percentage")
+
+
+#--------------------COMPARISON PLOTS
+candidates <- c(rep("biden", 10), rep("trump", 10))
+sentiments <- c("anger", "anticipation", "disgust", "fear", "joy", "sadness", "surprise", "trust", "negative", "positive")
+value <- c(dfnrc_new$count, donrc_new$count)
+data <- data.frame(candidates,sentiments,value)
+
+#Proportional sentiment bar graph
+ggplot(data, aes(fill=sentiments, x=candidates, y=value)) 
++ geom_bar(position="fill", stat="identity")
+
+#Separated sentiment bar graph
+ggplot(data, aes(fill=sentiments, x=candidates, y=value)) 
++ geom_bar(position="dodge", stat="identity")
+
+```

@@ -1,0 +1,123 @@
+---
+title: "bidenTMc.Rmd"
+output: html_document
+---
+```{r}
+library(dplyr)
+library(tm)
+library(parallel)
+library(wordcloud)
+library(syuzhet)
+library(ggplot2)
+library(stringr)
+```
+
+```{r}
+#Loading in data
+biden <- read.csv("hashtag_joebiden.csv")
+bidtwts <- biden %>% select(tweet)
+
+```
+
+```{r}
+#FUNCTIONS------------------------
+amp <- function(cleaned){
+# Get rid of hashtags
+  str_replace_all(cleaned,"#[a-z,A-Z]*","")
+# Get rid of references to other usernames
+  str_replace_all(cleaned,"@[a-z,A-Z]*","")
+# Get rid of URLs
+  gsub(" ?(f|ht)(tp)(s?)(://)(.*)[.|/]", "", cleaned)
+#get rid of unnecessary spaces
+  gsub(" [\n]", "", cleaned)
+  gsub("&amp", "", cleaned)
+}
+
+createcorpus <- function(tweets){
+  tweets <-  Corpus(VectorSource(tweets))
+}
+
+```
+
+```{r}
+#Setting up cores and clusters
+no_cores <- detectCores() - 1
+cl <- makeCluster(no_cores)
+```
+
+```{r}
+#Cleaning and creating corpus via parallel computation
+clusterEvalQ(cl, library(stringr))
+cleaned <- parLapply(cl, bidtwts, amp)
+
+clusterEvalQ(cl, library(tm))
+corpus1 <- parLapply(cl, cleaned, createcorpus)
+
+```
+
+```{r}
+#Further cleaning with 'tm'
+corpused <- tm_map(corpus1[[1]], content_transformer(tolower))
+corpused <- tm_map(corpused, removePunctuation)
+corpused <- tm_map(corpused, stripWhitespace)
+corpused <- tm_map(corpused, removeWords, stopwords("en"))
+
+```
+
+```{r}
+#Converting corpus to Term Document Matrix 
+tdm1 <- TermDocumentMatrix(corpused)
+sprs <- removeSparseTerms(tdm1, 0.99)
+mat2 <- as.matrix(sprs)
+srt2 <- sort(rowSums(mat2), decreasing=TRUE)
+dfdn <- data.frame(word = names(srt2), freq = srt2)
+
+```
+
+```{r}
+#Customised character vector of words to remove from matrix
+rmwords <- paste(c("trump", "biden", "joe", "joebiden", "donald", "kamala", "harris","2020", "elections", "usa", "america", "president", "election", "cnn", "amp", "que", "twitter", "vote", "covid", "'s", "maga", "gop", "elecciones", "coronavirus", "maga", "potus", "los", "states", "les", "con", "democrats", "las", "die", "che", "des", "por", "und", "obama","alabama","alaska","arizona","arkansas","california","colorado","connecticut","delaware","florida","georgia","hawaii","idaho","illinois","indiana","iowa","kansas","kentucky","louisiana","maine","maryland","massachusetts","michigan","minnesota","mississippi","missouri","montana","nebraska","nevada","new hampshire","new jersey","new mexico","new york","north carolina","north dakota","ohio","oklahoma","oregon","pennsylvania","rhode island","south carolina", "south dakota","tennessee","texas","utah","vermont","virginia","washington","west virginia","wisconsin","wyoming"), collapse = "|")
+
+dfdn <- dfdn %>% filter(!grepl(rmwords, word))
+```
+
+```{r}
+#---------------------------------------RESULTS----------
+#WORDCLOUD
+wordcloud(words=dfdn$word, freq=dfdn$freq, min.freq=5, max.words=100,
+          random.order=FALSE, rot.per = 0.4, colors=brewer.pal(8, "Dark2"))
+
+#BARPLOT
+barplot(dfdn[1:10,]$freq, names.arg = dfdn[1:10,]$word, col ="dodgerblue2", 
+        main ="Top 10 most frequent words", ylab = "Word frequencies")
+
+```
+
+```{r}
+#EMOTION CLASSIFICATION
+tweetsch <- sapply(dfdn, as.character)
+tweetsch <- as.character(tweetsch)
+nrc <- get_nrc_sentiment(tweetsch)
+head(nrc, 10)
+
+dfnrc <- data.frame(t(nrc))
+dim(dfnrc)
+dfnrc_new <- data.frame(rowSums(dfnrc))
+names(dfnrc_new)[1] <- "count"
+dfnrc_new <- cbind("sentiment" = rownames(dfnrc_new), dfnrc_new)
+rownames(dfnrc_new) <- NULL
+
+#For plotting individual sentiment graph
+qplot(sentiment, data=dfnrc_new, weight=count, geom="bar", fill=sentiment, 
+      ylab="count") + ggtitle("Survey sentiments")
+
+#For plotting individual proportional sentiment graph
+barplot(
+  sort(colSums(prop.table(nrc))), 
+  col = "dodgerblue3",
+  horiz = TRUE, 
+  cex.names = 0.7, 
+  las = 1, 
+  main = "Emotions in Text", xlab="Percentage")
+
+```
